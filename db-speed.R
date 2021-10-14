@@ -458,4 +458,84 @@ cb_speed_season_stats <- cb_speed_projs %>%
             speed_oe = mean(speed_oe)) %>%
   filter(plays >= 10)
 
+#######################################################################
+
+cb_speed_projs <- read_csv(url("https://raw.githubusercontent.com/tejseth/cb-speed/master/cb_speed_projs.csv"))
+
+combine_data <- pull_api("/v1/player_combine_results")$player_combine_results
+pro_day_data <- pull_api("/v1/player_pro_day")$player_pro_day
+
+combine_combine <- function(combine_data.frame, pro_day_data.frame) {
+  combine <- combine_data.frame %>% dplyr::select(season = year, player_id, position = projected_position,
+                                                  height = height_in_inches, weight = weight_in_pounds,
+                                                  arm = arm_length_in_inches, right_hand = right_hand_size_in_inches,
+                                                  left_hand = left_hand_size_in_inches, wing = wingspan_in_inches,
+                                                  forty = fourty_time_in_seconds, twenty = twenty_time_in_seconds,
+                                                  ten = ten_time_in_seconds, bench = bench_press_in_reps,
+                                                  vertical = vertical_jump_in_inches, broad = broad_jump_in_inches,
+                                                  shuttle = twenty_shuttle_in_seconds, cone = three_cone_in_seconds)
+  pro_day <- pro_day_data.frame %>% dplyr::select(season = year, player_id, position_pd = projected_position,
+                                                  height_pd = height_in_inches, weight_pd = weight_in_pounds,
+                                                  arm_pd = arm_length_in_inches, right_hand_pd = right_hand_size_in_inches,
+                                                  left_hand_pd = left_hand_size_in_inches, wing_pd = wingspan_in_inches,
+                                                  forty_pd = fourty_time_in_seconds, twenty_pd = twenty_time_in_seconds,
+                                                  ten_pd = ten_time_in_seconds, bench_pd = bench_press_in_reps,
+                                                  vertical_pd = vertical_jump_in_inches, broad_pd = broad_jump_in_inches,
+                                                  shuttle_pd = twenty_shuttle_in_seconds, cone_pd = three_cone_in_seconds)
+  all_data <- full_join(combine, pro_day, by = c("season", "player_id"))
+  height_lm <- lm(height ~ height_pd, all_data)
+  weight_lm <- lm(weight ~ weight_pd, all_data)
+  arm_lm <- lm(arm ~ arm_pd, all_data)
+  right_hand_lm <- lm(right_hand ~ right_hand_pd, all_data)
+  #left_hand_lm <- lm(left_hand ~ left_hand_pd, all_data) #Not really worth doing
+  wing_lm <- lm(wing ~ wing_pd, all_data)
+  forty_lm <- lm(forty ~ forty_pd, all_data)
+  twenty_lm <- lm(twenty ~ twenty_pd, all_data)
+  ten_lm <- lm(ten ~ ten_pd, all_data)
+  bench_lm <- lm(bench ~ bench_pd, all_data)
+  vertical_lm <- lm(vertical ~ vertical_pd, all_data)
+  broad_lm <- lm(broad ~ broad_pd, all_data)
+  shuttle_lm <- lm(shuttle ~ shuttle_pd, all_data)
+  cone_lm <- lm(cone ~ cone_pd, all_data)
+  all_data <- all_data %>%
+    mutate(height_pd = round(predict(height_lm, all_data), 3),
+           weight_pd = round(predict(weight_lm, all_data), 0),
+           arm_pd = round(predict(arm_lm, all_data), 3),
+           right_hand_pd = round(predict(right_hand_lm, all_data), 3),
+           wing_pd = round(predict(wing_lm, all_data), 3),
+           forty_pd = round(predict(forty_lm, all_data), 2),
+           twenty_pd = round(predict(twenty_lm, all_data),2),
+           ten_pd = round(predict(ten_lm, all_data), 2),
+           bench_pd = round(predict(bench_lm, all_data), 0),
+           vertical_pd = round(predict(vertical_lm, all_data), 1),
+           broad_pd = round(predict(broad_lm, all_data), 0),
+           shuttle_pd = round(predict(shuttle_lm, all_data), 2),
+           cone_pd = round(predict(cone_lm, all_data), 2))
+  all_data <- all_data %>%
+    mutate(position = ifelse(is.na(position), position_pd, position),
+           height = ifelse(is.na(height), height_pd, height), weight = ifelse(is.na(weight), weight_pd, weight),
+           arm = ifelse(is.na(arm), arm_pd, arm), right_hand = ifelse(is.na(right_hand), right_hand_pd, right_hand),
+           left_hand = ifelse(is.na(left_hand), left_hand_pd, left_hand), wing = ifelse(is.na(wing), wing_pd, wing),
+           forty = ifelse(is.na(forty), forty_pd, forty), twenty = ifelse(is.na(twenty), twenty_pd, twenty),
+           ten = ifelse(is.na(ten), ten_pd, ten), bench = ifelse(is.na(bench), bench_pd, bench),
+           vertical = ifelse(is.na(vertical), vertical_pd, vertical), broad = ifelse(is.na(broad), broad_pd, broad),
+           shuttle = ifelse(is.na(shuttle), shuttle_pd, shuttle), cone = ifelse(is.na(cone), cone_pd, cone)) %>%
+    dplyr::select(season, player_id, position, height, weight, arm, hand = right_hand, wing, forty,
+                  twenty, ten, bench, vertical, broad, shuttle, cone)
+  return(all_data)
+}
+
+combine_all_results <- combine_combine(combine_data, pro_day_data)
+
+combine_select <- combine_all_results %>%
+  dplyr::select(player_id, forty, combine_season = season, twenty, ten, combine_weight = weight, position) %>%
+  mutate(speed_score = forty / combine_weight)
+
+season_speed <- cb_speed_projs %>%
+  group_by(player_name, season) %>%
+  summarize(plays = n(),
+            exp_speed = mean(exp_speed),
+            avg_speed = mean(avg_speed),
+            avg_ssoe = mean(speed_oe)) %>%
+  filter(plays >= 5)
 
