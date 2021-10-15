@@ -1,6 +1,19 @@
 library(rdtools)
 library(tidyverse)
+library(ggthemes)
+library(nflfastR)
+library(mltools)
 library(data.table)
+library(xgboost)
+library(caret)
+library(vip)
+library(SHAPforxgboost)
+library(ggimage)
+library(ggcorrplot)
+library(lme4)
+library(merTools)
+
+passing_data <<- pull_s3(paste0("analytics/projections/by_facet/", 'nfl', "/%i/passing.csv.gz"), season_start = 2018, season_end = 2021)
 
 tracking_pass_2020_1 <- pull_ngs(season_start = 2020, season_end = 2020, wk_start = 1, wk_end = 1, run_pass_all = "p")
 tracking_pass_2020_2 <- pull_ngs(season_start = 2020, season_end = 2020, wk_start = 2, wk_end = 2, run_pass_all = "p")
@@ -461,6 +474,30 @@ cb_speed_season_stats <- cb_speed_projs %>%
 #######################################################################
 
 cb_speed_projs <- read_csv(url("https://raw.githubusercontent.com/tejseth/cb-speed/master/cb_speed_projs.csv"))
+player_roster <- pull_s3("master_data/players/export.csv.gz")
+
+player_roster_select <- player_roster %>%
+  mutate(player_name = paste0(first_name, " ", last_name)) %>%
+  dplyr::select(player_name, id) %>%
+  mutate(player_name = case_when(
+    player_name == "Jackrabbit Jenkins" ~ "Janoris Jenkins",
+    player_name == "William Jackson" ~ "William Jackson III",
+    player_name == "Adrian Amos Jr." ~ "Adrian Amos",
+    player_name == "Byron Murphy Jr." ~ "Byron Murphy",
+    player_name == "Jessie Bates III" ~ "Jessie Bates",
+    TRUE ~ player_name
+  ))
+
+cb_speed_projs <- cb_speed_projs %>%
+  mutate(player_name = case_when(
+    player_name == "William Jackson" ~ "William Jackson III",
+    player_name == "Jessie Bates III" ~ "Jessie Bates",
+    player_name == "Adrian Amos Jr." ~ "Adrian Amos",
+    TRUE ~ player_name,
+  )) %>%
+  left_join(player_roster_select, by = c("player_name"))
+
+cb_speed_projs %>% filter(is.na(id)) %>% group_by(player_name) %>% tally(sort = T)
 
 combine_data <- pull_api("/v1/player_combine_results")$player_combine_results
 pro_day_data <- pull_api("/v1/player_pro_day")$player_pro_day
@@ -531,11 +568,74 @@ combine_select <- combine_all_results %>%
   dplyr::select(player_id, forty, combine_season = season, twenty, ten, combine_weight = weight, position) %>%
   mutate(speed_score = forty / combine_weight)
 
-season_speed <- cb_speed_projs %>%
-  group_by(player_name, season) %>%
+cb_speed_projs_filtered <- cb_speed_projs %>%
+  filter(half_seconds_remaining >= 40) %>%
+  filter(between(speed_oe, -2.5, 2.5))
+
+season_speed <- cb_speed_projs_filtered %>%
+  group_by(player_name, id, season) %>%
   summarize(plays = n(),
             exp_speed = mean(exp_speed),
             avg_speed = mean(avg_speed),
-            avg_ssoe = mean(speed_oe)) %>%
-  filter(plays >= 5)
+            avg_soe = mean(speed_oe)) %>%
+  filter(plays >= 4) 
+
+season_speed <- season_speed %>%
+  left_join(combine_select, by = c("id" = "player_id")) %>%
+  filter(!position %in% c("DI", "HB", "LB", "QB"))
+
+range01 <- function(x){(x-min(x))/(max(x)-min(x))}
+
+season_speed$forty[is.na(season_speed$forty)] <- mean(season_speed$forty, na.rm = T)
+season_speed$twenty[is.na(season_speed$twenty)] <- mean(season_speed$twenty, na.rm = T)
+season_speed$ten[is.na(season_speed$ten)] <- mean(season_speed$ten, na.rm = T)
+
+forty_rank <- season_speed %>%
+  ungroup() %>%
+  arrange(forty) %>%
+  mutate(forty_rank = row_number()) %>%
+  dplyr::select(forty_rank, adj_forty = forty)
+
+season_speed_to_40 <- season_speed %>%
+  ungroup() %>%
+  arrange(-avg_soe) %>%
+  mutate(speed_perc = round(100*range01(avg_soe), 1),
+         speed_rank = row_number()) %>%
+  left_join(forty_rank, by = c("speed_rank" = "forty_rank"))
+
+lm_40 <- lm(adj_forty ~ speed_perc, data = season_speed_to_40)
+summary(lm_40)
+
+career_speed_40 <- cb_speed_projs_filtered %>%
+  group_by(player_name, id) %>%
+  summarize(plays = n(),
+            exp_speed = mean(exp_speed),
+            avg_speed = mean(avg_speed),
+            avg_speed_oe = mean(speed_oe)) %>%
+  filter(plays >= 15) %>%
+  distinct(player_name, .keep_all = T) %>%
+  left_join(combine_select, by = c("id" = "player_id"))
+
+career_speed_40_filtered <- career_speed_40 %>%
+  filter(!is.na(forty))
+
+summary(lm(avg_speed_oe ~ forty, data = career_speed_40_filtered))$r.squared #0.03
+summary(lm(avg_speed_oe ~ twenty, data = career_speed_40_filtered))$r.squared #0.00
+summary(lm(avg_speed_oe ~ ten, data = career_speed_40_filtered))$r.squared #0.04
+summary(lm(avg_speed_oe ~ speed_score, data = career_speed_40_filtered))$r.squared #0.02
+
+career_speed_40 %>%
+  filter(!is.na(forty)) %>%
+  ggplot(aes(x = forty, y = avg_speed_oe)) +
+  geom_smooth(method = "lm", color = "black", se = FALSE) +
+  geom_point(aes(size = plays), shape = 21, fill = "darkorange", color = "black") +
+  ggrepel::geom_text_repel(aes(label = player_name), size = 5, box.padding = 0.3) +
+  theme_reach() +
+  labs(x = "Forty Time",
+       y = "Average Speed Over Expected",
+       title = "How Forty Time Correlates With Speed Over Expected",
+       subtitle = "2018-2020, minimum of 20 straight-line plays") +
+  scale_x_reverse(breaks = scales::pretty_breaks(n = 6)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6))
+  
 
