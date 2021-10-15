@@ -628,8 +628,8 @@ career_speed_40 %>%
   filter(!is.na(forty)) %>%
   ggplot(aes(x = forty, y = avg_speed_oe)) +
   geom_smooth(method = "lm", color = "black", se = FALSE) +
-  geom_point(aes(size = plays), shape = 21, fill = "darkorange", color = "black") +
-  ggrepel::geom_text_repel(aes(label = player_name), size = 5, box.padding = 0.3) +
+  geom_point(aes(size = plays), shape = 21, fill = "gray", color = "black") +
+  ggrepel::geom_text_repel(aes(label = player_name), size = 4.5, box.padding = 0.3) +
   theme_reach() +
   labs(x = "Forty Time",
        y = "Average Speed Over Expected",
@@ -637,5 +637,6 @@ career_speed_40 %>%
        subtitle = "2018-2020, minimum of 20 straight-line plays") +
   scale_x_reverse(breaks = scales::pretty_breaks(n = 6)) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 6))
-  
+
+write.csv(season_speed_to_40, "cb_speed_to_40.csv")  
 
